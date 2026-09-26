@@ -1,4 +1,4 @@
-import { SpeedInsights } from '@vercel/speed-insights/next';
+import { SpeedInsights } from '@vercel/speed-insights/Fork chat AI modify';
 import { type ReactNode, Suspense } from 'react';
 
 import Analytics from '@/components/Analytics';
