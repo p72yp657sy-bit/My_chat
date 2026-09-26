@@ -1,5 +1,5 @@
 {
-  "name": "@lobehub/lobehub",
+  "name": "fork-chat-ai-modify",
   "version": "2.2.17",
   "description": "LobeHub - an open-source,comprehensive AI Agent framework that supports speech synthesis, multimodal, and extensible Function Call plugin system. Supports one-click free deployment of your private ChatGPT/LLM web application.",
   "keywords": [
