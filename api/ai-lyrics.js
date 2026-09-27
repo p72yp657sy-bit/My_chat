@@ -1,6 +1,6 @@
 // Ai-lyrics.js - moduł obsługujący OpenRouter
 
-const OPENROUTER_API_KEY = "TUTAJ_WKLEJ_SWÓJ_KLUCZ_OPENROUTER"; 
+const OPENROUTER_API_KEY = "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"; 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 
 // Możesz podać domyślny model, np. darmowy lub tani model z OpenRouter
