@@ -39,13 +39,15 @@ import {
   resolveTargetDeviceId,
 } from '@/helpers/agentWorkingDirectory';
 import {
+  applyTopicDeviceBinding,
+  getTopicBoundDeviceId,
   resolveExecutionTarget,
   resolveToolMode,
   resolveWorkspaceScoped,
 } from '@/helpers/executionTarget';
 import { globalAgentContextManager } from '@/helpers/GlobalAgentContextManager';
 import { agentService } from '@/services/agent';
-import { aiAgentService } from '@/services/aiAgent';
+import { aiAgentService, MAX_CLIENT_OPERATION_SNAPSHOT } from '@/services/aiAgent';
 import { aiChatService } from '@/services/aiChat';
 import { chatService } from '@/services/chat';
 import { resolveSelectedSkillsWithContent } from '@/services/chat/mecha/skillPreload';
@@ -63,6 +65,7 @@ import { getPendingTopicRepos } from '@/store/chat/pendingTopicRepos';
 import {
   dbMessageSelectors,
   displayMessageSelectors,
+  operationSelectors,
   topicSelectors,
 } from '@/store/chat/selectors';
 import { selectRuntimeType } from '@/store/chat/slices/agentRun/actions/dispatch/agentDispatcher';
@@ -459,15 +462,25 @@ export class ConversationLifecycleActionImpl {
     const deviceOverride = agent?.workspaceId
       ? getUserStoreState().workspaceUserPreference.agentDeviceOverrides?.[agentId]
       : undefined;
-    const workspaceScoped = resolveWorkspaceScoped(usesWorkspaceMemberSelection, deviceOverride);
     // Runtime selection must use the same per-user device override as the
     // switcher. A workspace-local pick is intentionally private to this member
-    // and is therefore safe to execute in-process on their desktop.
-    const agencyConfig = resolveAgentAgencyConfig(agentConfig?.agencyConfig, deviceOverride, {
-      canManage,
-      visibility: agent?.visibility,
-      workspaceId: agent?.workspaceId,
-    });
+    // and is therefore safe to execute in-process on their desktop. An existing
+    // conversation then stays on the machine it already ran on.
+    const { agencyConfig, workspaceScoped } = applyTopicDeviceBinding(
+      {
+        agencyConfig: resolveAgentAgencyConfig(agentConfig?.agencyConfig, deviceOverride, {
+          canManage,
+          visibility: agent?.visibility,
+          workspaceId: agent?.workspaceId,
+        }),
+        workspaceScoped: resolveWorkspaceScoped(usesWorkspaceMemberSelection, deviceOverride),
+      },
+      getTopicBoundDeviceId(
+        context.topicId ? topicSelectors.getTopicById(context.topicId)(this.#get()) : undefined,
+        agentId,
+      ),
+      getElectronStoreState().gatewayDeviceInfo?.deviceId,
+    );
     const isGatewayMode = this.#get().isGatewayModeEnabled(agentId);
     // Legacy agents may only carry `model: '<cli-type>'`. Keep gateway routing
     // unchanged when it is available. Recover the provider when gateway mode is
@@ -725,7 +738,11 @@ export class ConversationLifecycleActionImpl {
         break;
       }
     }
-    if (runningQueueBlockingOp) {
+    const queueDrainPending =
+      !runningQueueBlockingOp &&
+      !onlyAddUserMessage &&
+      operationSelectors.isQueueDrainPending(operationContext)(this.#get());
+    if (runningQueueBlockingOp || queueDrainPending) {
       // Snapshot file previews so the tray can render thumbnails AND the
       // resumed sendMessage can rebuild audioList/imageList/videoList — by the time
       // we drain, chatUploadFileList has long been cleared.
@@ -750,7 +767,7 @@ export class ConversationLifecycleActionImpl {
           metadata: userMessageMetadata,
           createdAt: Date.now(),
         },
-        runningQueueBlockingOp.id,
+        runningQueueBlockingOp?.id,
       );
       notifyMessageAccepted();
       return;
@@ -812,15 +829,28 @@ export class ConversationLifecycleActionImpl {
       return;
     }
 
-    const replaceableGatewayOperationId = queueCandidateKeys
+    const serverRuntimeOperations = queueCandidateKeys
       .flatMap((key) => this.#get().operationsByContext[key] || [])
       .map((id) => this.#get().operations[id])
-      .findLast(
-        (operation) =>
-          operation?.type === 'execServerAgentRuntime' &&
-          operation.status === 'running' &&
-          (operation.metadata.isAborting || operation.metadata.visibleLoadingDone),
-      )?.metadata.serverOperationId;
+      .filter((operation) => operation?.type === 'execServerAgentRuntime');
+
+    const replaceableGatewayOperationId = serverRuntimeOperations.findLast(
+      (operation) =>
+        operation.status === 'running' &&
+        (operation.metadata.isAborting || operation.metadata.visibleLoadingDone),
+    )?.metadata.serverOperationId;
+
+    // What this client believes about the conversation's server runs. The
+    // server keeps it only when the send has to stop a run left live.
+    const clientOperations = serverRuntimeOperations
+      .filter((operation) => operation.metadata.serverOperationId)
+      .slice(-MAX_CLIENT_OPERATION_SNAPSHOT)
+      .map((operation) => ({
+        isAborting: operation.metadata.isAborting,
+        operationId: operation.metadata.serverOperationId!,
+        status: operation.status,
+        visibleLoadingDone: operation.metadata.visibleLoadingDone,
+      }));
 
     if (onlyAddUserMessage) {
       await this.#get().addUserMessage({
@@ -871,6 +901,9 @@ export class ConversationLifecycleActionImpl {
     // whole send.
     const tempId = optimisticUserMessageId ?? generateEntityId('messages');
     const tempAssistantId = generateEntityId('messages');
+    const steeredTurnStartTime = (metadata as Pick<MessageMetadata, 'steer'> | undefined)?.steer
+      ? operationSelectors.getLatestAgentRuntimeTurnStartTime(operationContext)(this.#get())
+      : undefined;
     const { operationId, abortController } = this.#get().startOperation({
       type: 'sendMessage',
       context: { ...operationContext, messageId: tempId },
@@ -878,6 +911,7 @@ export class ConversationLifecycleActionImpl {
       metadata: {
         // Mark this as thread operation if threadId exists
         inThread: !!operationContext.threadId,
+        ...(steeredTurnStartTime === undefined ? {} : { turnStartTime: steeredTurnStartTime }),
       },
     });
     sendOperationId = operationId;
@@ -1211,15 +1245,30 @@ export class ConversationLifecycleActionImpl {
     const resolveWorkingDirPath = isLocalCliHetero
       ? getWorkingDirSourcePath
       : getWorkingDirEffectivePath;
+    // A topic's cwd is a bare path that only holds on the machine it was pinned
+    // on — never hand another machine's path to this run (mirrors the server's
+    // `topicPinFitsDevice`).
+    const topicDeviceId = existingTopic?.metadata?.boundDeviceId;
+    const topicCwdMetadata =
+      topicDeviceId && runCwdDeviceId && topicDeviceId !== runCwdDeviceId
+        ? undefined
+        : existingTopic?.metadata;
     const workingDirectory =
-      resolveWorkingDirPath(existingTopic?.metadata?.workingDirectoryConfig) ??
-      existingTopic?.metadata?.workingDirectory ??
+      resolveWorkingDirPath(topicCwdMetadata?.workingDirectoryConfig) ??
+      topicCwdMetadata?.workingDirectory ??
       agentWorkingDirectory;
     const workingDirectoryConfig =
-      existingTopic?.metadata?.workingDirectoryConfig ??
-      (existingTopic?.metadata?.workingDirectory
-        ? { path: existingTopic.metadata.workingDirectory }
+      topicCwdMetadata?.workingDirectoryConfig ??
+      (topicCwdMetadata?.workingDirectory
+        ? { path: topicCwdMetadata.workingDirectory }
         : agentWorkingDirectoryConfig);
+    // Record which machine a new conversation runs on, so its next turn — and
+    // the device picker — stay on it after the agent default changes. `auto`
+    // has not picked a machine yet; the server stamps the one it routes to.
+    const newTopicDeviceId =
+      runEffectiveTarget === 'local' || runEffectiveTarget === 'device'
+        ? runCwdDeviceId
+        : undefined;
     const pendingTopicRepos =
       runtimeType === 'gateway' && willCreateNewTopic && operationContext.agentId
         ? getPendingTopicRepos(operationContext.agentId)
@@ -1238,10 +1287,16 @@ export class ConversationLifecycleActionImpl {
           }
         : workingDirectory
           ? {
+              ...(newTopicDeviceId ? { boundDeviceId: newTopicDeviceId } : {}),
               workingDirectory,
               ...(workingDirectoryConfig ? { workingDirectoryConfig } : {}),
             }
-          : undefined;
+          : // No directory is a valid state for a native agent, but the machine
+            // still has to be recorded: the client runtime creates this topic
+            // itself, so no server turn would stamp it afterwards.
+            newTopicDeviceId
+            ? { boundDeviceId: newTopicDeviceId }
+            : undefined;
     /** First-send persistence bypasses turnSetup, so both runtime paths must carry the effort snapshot. */
     const optimisticTopicMetadata = newTopicReasoningSnapshot
       ? { ...workingDirectoryMetadata, ...newTopicReasoningSnapshot }
@@ -1773,6 +1828,7 @@ export class ConversationLifecycleActionImpl {
           onMessageAccepted: notifyMessageAccepted,
           onTopicCreated: context.isolatedTopic ? onTopicCreated : undefined,
           parentOperationId: operationId,
+          clientOperations,
           replacesOperationId: replaceableGatewayOperationId,
           optimisticTopic,
           // Forward @-mentioned tool ids so the server runtime enables them for

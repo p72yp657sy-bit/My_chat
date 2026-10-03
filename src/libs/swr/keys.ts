@@ -251,8 +251,27 @@ export const isDocumentCommentKeyForEvent = (
 
 // ---- agent --------------------------------------------------------------
 export const agentKeys = {
-  /** Sidebar agent list. */
-  list: def('agent:list', (isLogin: boolean) => ['agent:list', isLogin]),
+  /** Sidebar agent list network sync. Zustand owns the persisted UI projection. */
+  list: def('agentSync:list', (isLogin: boolean, scope: string) => [
+    'agentSync:list',
+    isLogin,
+    scope,
+  ]),
+};
+
+export const isAgentListKey = (key: unknown, scope: string): boolean =>
+  Array.isArray(key) && key[0] === agentKeys.list.root && key[2] === scope;
+
+export const agentProjectionKeys = {
+  configHydration: def('agentProjection:configHydration', (scope: string, agentId: string) => [
+    'agentProjection:configHydration',
+    scope,
+    agentId,
+  ]),
+  listHydration: def('agentProjection:listHydration', (scope: string) => [
+    'agentProjection:listHydration',
+    scope,
+  ]),
 };
 
 // ---- agent labels -------------------------------------------------------
@@ -363,6 +382,8 @@ export const isMyTaskListKey = (key: unknown): boolean =>
 export const goalKeys = {
   graph: def('goal:graph', (goalId: string) => ['goal:graph', goalId]),
   metricSeries: def('goal:metricSeries', (goalId: string) => ['goal:metricSeries', goalId]),
+  /** Clarifications waiting on the user across every goal they own. */
+  pendingClarifications: def('goal:pendingClarifications', () => ['goal:pendingClarifications']),
   /** Goals whose planning conversation is this topic (`subject_type = 'topic'`). */
   topicGoals: def('goal:topicGoals', (topicId: string) => ['goal:topicGoals', topicId]),
 };
@@ -535,12 +556,39 @@ export const homeInboxKeys = {
 // (agentKeys.list defined above)
 export const agentConfigKeys = {
   available: def('agent:available', () => ['agent:available']),
-  config: def('agent:config', (agentId: string) => ['agent:config', agentId]),
+  config: def('agentSync:config', (agentId: string, scope: string) => [
+    'agentSync:config',
+    agentId,
+    scope,
+  ]),
   search: def('agent:search', (keyword?: string) => ['agent:search', keyword]),
   serverDefaultHeterogeneousCapability: def('agent:serverDefaultHeterogeneousCapability', () => [
     'agent:serverDefaultHeterogeneousCapability',
   ]),
 };
+
+export const isAgentConfigKey = (key: unknown, agentId: string, scope: string): boolean =>
+  Array.isArray(key) &&
+  key[0] === agentConfigKeys.config.root &&
+  key[1] === agentId &&
+  key[2] === scope;
+
+// ---- project ------------------------------------------------------------
+export const projectKeys = {
+  detail: def('project:detail', (scope: string, id: string) => ['project:detail', scope, id]),
+  detailHydration: def('project:detailHydration', (scope: string, id: string) => [
+    'project:detailHydration',
+    scope,
+    id,
+  ]),
+  list: def('project:list', (scope: string) => ['project:list', scope]),
+  listHydration: def('project:listHydration', (scope: string) => ['project:listHydration', scope]),
+};
+
+export const isProjectDetailKey = (key: unknown, scope: string, id: string): boolean =>
+  Array.isArray(key) && key[0] === projectKeys.detail.root && key[1] === scope && key[2] === id;
+export const isProjectListKey = (key: unknown, scope: string): boolean =>
+  Array.isArray(key) && key[0] === projectKeys.list.root && key[1] === scope;
 
 // ---- aiModel ------------------------------------------------------------
 export const aiModelKeys = {
@@ -592,7 +640,7 @@ export const serverConfigKeys = {
 
 // ---- discover (marketplace) ---------------------------------------------
 // NOTE: discover/eval/ragEval/knowledgeBase/device/userMemory/agentKnowledge/
-// agentBot/file/chatTool prefixes are deliberately kept OUT of `CACHE_TIERS`
+// agentBot/file prefixes are deliberately kept OUT of `CACHE_TIERS`
 // (see localStorageProvider.ts) so this key-convergence introduces no new
 // persistence — they stay memory-only exactly as before.
 export const discoverKeys = {
@@ -836,6 +884,11 @@ export const knowledgeBaseKeys = {
 };
 
 // ---- device -------------------------------------------------------------
+export const trashKeys = {
+  countByType: def('trash:countByType', () => ['trash:countByType']),
+  list: def('trash:list', (resourceType?: string | null) => ['trash:list', resourceType ?? 'all']),
+};
+
 export const deviceKeys = {
   appUpdateState: def('device:appUpdateState', (workspaceId: string | null, deviceId: string) => [
     'device:appUpdateState',
@@ -1038,11 +1091,6 @@ export const fileKeys = {
   ttsFile: def('file:ttsFile', (messageId: string) => ['file:ttsFile', messageId]),
 };
 
-// ---- chat tools ---------------------------------------------------------
-export const chatToolKeys = {
-  interpreterFile: def('chat:interpreterFile', (id: string) => ['chat:interpreterFile', id]),
-};
-
 // =========================================================================
 // UI-layer keys (features / routes / components). Prefixes below stay
 // memory-only unless explicitly listed in `CACHE_TIERS`. Names avoid colliding
@@ -1133,6 +1181,15 @@ export const expertiseKeys = {
   ]),
   lesson: def('expertise:lesson', (lessonId: string) => ['expertise:lesson', lessonId]),
   overview: def('expertise:overview', (agentId: string) => ['expertise:overview', agentId]),
+  ruleRevisions: def('expertise:ruleRevisions', (lessonId: string) => [
+    'expertise:ruleRevisions',
+    lessonId,
+  ]),
+  ruleSources: def('expertise:ruleSources', (lessonId: string) => [
+    'expertise:ruleSources',
+    lessonId,
+  ]),
+  rules: def('expertise:rules', () => ['expertise:rules']),
 };
 
 export const verifyKeys = {
@@ -1518,7 +1575,7 @@ export const matchDomain =
  * Aggregate registry — one entry point for every domain's keys.
  */
 export const swrKeys = {
-  agent: { ...agentKeys, ...agentConfigKeys },
+  agent: { ...agentKeys, ...agentConfigKeys, ...agentProjectionKeys },
   agentBot: agentBotKeys,
   agentBuilder: agentBuilderKeys,
   agentDocument: agentDocumentSWRKeys,
@@ -1532,7 +1589,6 @@ export const swrKeys = {
   brief: briefKeys,
   builtinAgent: builtinAgentKeys,
   changelog: changelogKeys,
-  chatTool: chatToolKeys,
   cron: cronKeys,
   device: deviceKeys,
   discover: discoverKeys,
@@ -1561,6 +1617,7 @@ export const swrKeys = {
   onboarding: onboardingKeys,
   openInApp: openInAppKeys,
   portal: portalKeys,
+  project: projectKeys,
   provider: providerKeys,
   ragEval: ragEvalKeys,
   recent: recentKeys,
@@ -1580,6 +1637,7 @@ export const swrKeys = {
   documentComment: documentCommentKeys,
   documentLike: documentLikeKeys,
   topicAction: topicActionKeys,
+  trash: trashKeys,
   user: userKeys,
   userMemory: userMemoryKeys,
   verify: verifyKeys,

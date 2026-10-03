@@ -1,17 +1,16 @@
 'use client';
 
-import { LoadingOutlined } from '@ant-design/icons';
 import { Flexbox, Icon } from '@lobehub/ui';
 import {
   Alert,
   createModal,
   type ModalInstance,
   Spin,
+  Text,
   toast,
   Upload,
   useModalContext,
 } from '@lobehub/ui/base-ui';
-import { Typography } from 'antd';
 import { sha256 } from 'js-sha256';
 import { ArrowLeftRight, InboxIcon, Sparkles, Upload as UploadIcon } from 'lucide-react';
 import { memo, useEffect, useState } from 'react';
@@ -84,10 +83,10 @@ const UploadSkillContent = memo(() => {
         </Flexbox>
 
         <Flexbox align="center" gap={4}>
-          <Typography.Title level={4} style={{ margin: 0 }}>
+          <Text as={'h4'} style={{ margin: 0 }}>
             {t('agentSkillModal.upload.title')}
-          </Typography.Title>
-          <Typography.Text type="secondary">{t('agentSkillModal.upload.desc')}</Typography.Text>
+          </Text>
+          <Text type={'secondary'}>{t('agentSkillModal.upload.desc')}</Text>
         </Flexbox>
       </Flexbox>
 
@@ -102,10 +101,8 @@ const UploadSkillContent = memo(() => {
         <Flexbox align="center" gap={8} padding={24}>
           {loading ? (
             <>
-              <Spin indicator={<LoadingOutlined spin />} />
-              <Typography.Text type="secondary">
-                {t('agentSkillModal.upload.uploading')}
-              </Typography.Text>
+              <Spin />
+              <Text type={'secondary'}>{t('agentSkillModal.upload.uploading')}</Text>
             </>
           ) : (
             <>
@@ -114,26 +111,24 @@ const UploadSkillContent = memo(() => {
                 size={48}
                 style={{ color: 'var(--ant-color-text-quaternary)' }}
               />
-              <Typography.Text type="secondary">
-                {t('agentSkillModal.upload.dragText')}
-              </Typography.Text>
+              <Text type={'secondary'}>{t('agentSkillModal.upload.dragText')}</Text>
             </>
           )}
         </Flexbox>
       </Upload>
 
       <Flexbox gap={8}>
-        <Typography.Text strong>{t('agentSkillModal.upload.requirements')}</Typography.Text>
+        <Text strong>{t('agentSkillModal.upload.requirements')}</Text>
         <ul style={{ margin: 0, paddingLeft: 20 }}>
           <li>
-            <Typography.Text type="secondary">
+            <Text as={'span'} type={'secondary'}>
               {t('agentSkillModal.upload.requirementZip')}
-            </Typography.Text>
+            </Text>
           </li>
           <li>
-            <Typography.Text type="secondary">
+            <Text as={'span'} type={'secondary'}>
               {t('agentSkillModal.upload.requirementSkillMd')}
-            </Typography.Text>
+            </Text>
           </li>
         </ul>
       </Flexbox>

@@ -225,6 +225,12 @@ export interface ExecAgentParams {
    * input — derived from the request context.
    */
   clientIp?: string;
+  /**
+   * Wire protocol this client speaks; `2` declares that it reconciles its
+   * message list from `message_patch` revisions, so the server may stop
+   * pushing whole `uiMessages` snapshots to it. Absent ⇒ 1.
+   */
+  clientProtocol?: 1 | 2;
   /** Explicit device ID to bind to the topic and activate for this run */
   deviceId?: string;
   /** Optional existing message IDs to include in context */
@@ -325,11 +331,25 @@ export interface ExecAgentResult {
   /** Structured availability context when a device dispatch failed before acceptance. */
   errorData?: DeviceUnavailableErrorData;
   /**
+   * The run continues a group member's approved tool under the supervisor's
+   * run (the supervisor keeps the topic and its stream). Explicit, because the
+   * member can be the supervisor agent itself.
+   */
+  groupMemberContinuation?: boolean;
+  /**
    * External heterogeneous producer for this run. `null` explicitly denotes
    * the normal AgentRuntime path; `undefined` is reserved for rolling clients
    * talking to an older server that did not yet return this discriminator.
    */
   heteroType?: string | null;
+  /**
+   * With `groupMemberContinuation`: the member's continuation operation. The
+   * client-facing `operationId` then names the supervisor's run, so a client
+   * released before this field keeps following the supervisor (its stream
+   * carries the member's continuation and the supervisor's closing) instead of
+   * taking the topic over and dropping it.
+   */
+  memberOperationId?: string;
   /** Status message */
   message: string;
   /** Queue message ID if auto-started */
@@ -340,6 +360,11 @@ export interface ExecAgentResult {
   status: string;
   /** Whether the operation was created successfully */
   success: boolean;
+  /**
+   * Server-side only, with `groupMemberContinuation`: the supervisor run the
+   * member continues under. Mapped into the client shape by the router.
+   */
+  supervisorOperationId?: string;
   /**
    * The failure was already announced through the run's terminal lifecycle —
    * `CompletionLifecycle` fired its `onComplete` hooks, so every consumer of
